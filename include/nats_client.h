@@ -5,8 +5,11 @@
 
 #include <boost/asio.hpp>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace net = boost::asio;
@@ -34,12 +37,25 @@ public:
     void setLogging(const Logger& l) { log_ = l; }
 
     ///
-    /// \begingroup NATS public client API
-    void pub(const std::string& subject);
+    /// \begingroup NATS core public client API
+    struct Message {
+        std::string subject;
+        std::string sid;
+        std::optional<std::string> replyTo;
+        std::size_t bytes = 0;
+        std::string payload;
+    };
+
+    void pub( const Message& msg);
     void hpub(const std::string& subject);
 
-    /// \returns sid
-    std::string sub(const std::string& subject);
+    struct Subscription {
+        std::string subject;
+        std::string sid;
+        std::optional<std::string> queueGroup;
+    };
+    typedef std::function<Message(const Message&)> MessageHandler;
+    void sub(const Subscription& subscription, const MessageHandler& handler);
     void unsub(const std::string& sid);
     /// \endgroup
     
@@ -57,7 +73,11 @@ private:
     ///
     /// \begingroup handlers for NATS server APIs
     NATSInfo handleInfo(std::istream& is);
-    void handleMsg(std::istream& is);
+    /// @brief
+    /// @param is 
+    /// @return next operation to perform
+    std::function<void()> handleMsg(std::istream& is);
+    void handleMsgPayload(const Message& in, std::istream& is);
     /// \endgroup
 
     // async handlers
@@ -75,6 +95,13 @@ private:
     std::string port_;
     boost::asio::streambuf response_;
     Logger log_;
+
+    /// the subscription key is a tuple of the subject and the sid.
+    /// maps subscribed sid tuples to message handlers.
+    std::unordered_map<std::string, MessageHandler> handlers_;
 };
+
+void request(NATSClient& nats_client, const NATSClient::Message& msg, const NATSClient::MessageHandler& handler);
+void reply(NATSClient& nats_client, const std::string& subject, const NATSClient::MessageHandler& handler);
 
 #endif // NATS_CLIENT_H

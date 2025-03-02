@@ -52,24 +52,69 @@ void REPL::onRead(const boost::system::error_code& ec, std::size_t length) {
 }
 
 bool REPL::evaluate(std::istream &is) {
+    std::string line;
+    if (!std::getline(is, line)) {
+        std::cerr << "Error reading input line" << std::endl;
+        return false;
+    }
+    
+    std::vector<std::string> tokens;
+    {
+        std::istringstream iss(line);
+        std::string token;
+        while (iss >> token) {
+            tokens.push_back(token);
+        }
+    }
+
     auto stop_reading = false;
-    std::string input;
-    if (std::getline(is, input)) {
+    if (!tokens.empty()) {
+        const auto input = tokens.front();
         if (input == "exit" || input == "quit") {
             stop_reading = true;
         } else if (input == "sub") {
-            nats_client_.sub("foo");
+            const auto subject = tokens.size() > 1 ? tokens[1] : "foo";
+            nats_client_.sub({.subject=subject, .sid="1"}, [](const NATSClient::Message& msg) {
+                std::cout << "Received message: " << msg.payload << std::endl;
+                return NATSClient::Message{};
+            });
         } else if (input == "unsub") {
             nats_client_.unsub("1");
         } else if (input == "pub") {
-            nats_client_.pub("foo");
+            nats_client_.pub({
+                .subject=tokens.size() > 1 ? tokens[1] : "foo", 
+                .payload=tokens.size() > 2 ? tokens[2] : "hello"
+            });
         } else if (input == "hpub") {
-            nats_client_.hpub("foo");
+            const auto subject = tokens.size() > 1 ? tokens[1] : "foo";
+            nats_client_.hpub(subject);
+        } else if (input == "request") {
+            const auto logger = [this](LogLevel level, const std::string& msg) {
+                print(level, msg);
+            };
+            request(nats_client_, {
+                .subject=tokens.size() > 1 ? tokens[1] : "foo",
+                .payload=tokens.size() > 2 ? tokens[2] : "hello"},
+                [logger](const NATSClient::Message& msg) {
+                    logger(LogLevel::INFO, "Received reply: " + msg.payload);
+                    return NATSClient::Message{};
+            });
+        } else if (input == "reply") {
+            const auto subject = tokens.size() > 1 ? tokens[1] : "foo";
+            const auto payload = tokens.size() > 2 ? tokens[2] : "hello";
+            print(LogLevel::INFO, "Listening on [" + subject + "] for requests");
+            const auto logger = [this](LogLevel level, const std::string& msg) {
+                print(level, msg);
+            };
+            reply(nats_client_, subject, [payload, logger](const NATSClient::Message& msg) {
+                logger(LogLevel::INFO, "Received request: " + msg.payload);
+                return NATSClient::Message{.payload = payload};
+            });
         } else {
             std::cerr << "Unknown command: " << input << std::endl;
         }
     } else {
-        std::cerr << "Error reading input" << std::endl;
+        std::cerr << "empty input" << std::endl;
         stop_reading = true;
     }
     return !stop_reading;

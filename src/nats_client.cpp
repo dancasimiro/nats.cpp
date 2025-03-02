@@ -1,5 +1,6 @@
 #include "nats_client.h"
 #include "simdjson.h"
+#include <vector>
 
 NATSClient::NATSClient(net::io_context& io_context, const std::string& host, const std::string& port)
     : io_context_(io_context), resolver_(io_context), socket_(io_context), host_(host), port_(port) {}
@@ -60,6 +61,7 @@ void NATSClient::onRead(const boost::system::error_code& ec, std::size_t bytes_t
     if (!ec) {
         std::istream response_stream(&response_);
         std::string response_line;
+        /// @todo std::getline is likely too naive to handle binary messages
         if (std::getline(response_stream, response_line)) {
             evaluateLine(response_line);
         } else {
@@ -80,11 +82,12 @@ void NATSClient::evaluateLine(const std::string& line) {
     std::string cmd;
     if (is >> cmd) {
         if (cmd != "-ERR") {
+            std::function<void()> nextOp = [this] { doRead(); };
             if (cmd == "+OK") {
             } else if (cmd == "PING") {
                 pong();
             } else if (cmd == "MSG") {
-                handleMsg(is);
+                nextOp = handleMsg(is);
             } else if (cmd == "INFO") {
                 auto info = handleInfo(is);
                 info.verbose = true;
@@ -92,7 +95,7 @@ void NATSClient::evaluateLine(const std::string& line) {
             } else {
                 log_(LogLevel::INFO, "Received->" + line);
             }
-            doRead(); // Continue reading for more responses
+            nextOp();
         } else {
             std::string error;
             if (!std::getline(is, error)) {
@@ -102,8 +105,7 @@ void NATSClient::evaluateLine(const std::string& line) {
             close();
         }
     } else {
-        log_(LogLevel::ERROR, "stream error reading command");
-        close();
+        log_(LogLevel::INFO, "stream error reading command");
     }
 }
 void NATSClient::connect(const NATSInfo& info) {
@@ -122,8 +124,12 @@ void NATSClient::pong() {
     send(pong_msg);
 }
 
-void NATSClient::pub(const std::string& subject) {
-    const auto pub_msg = "PUB " + subject + " 5\r\nhello\r\n";
+void NATSClient::pub(const Message& msg) {
+    auto pub_msg = "PUB " + msg.subject;
+    if (msg.replyTo.has_value()) {
+        pub_msg += " " + *msg.replyTo;
+    }
+    pub_msg += " " + std::to_string(msg.payload.size()) + "\r\n" + msg.payload + "\r\n";
     send(pub_msg);
 }
 
@@ -132,10 +138,15 @@ void NATSClient::hpub(const std::string& subject) {
     send(hpub_msg);
 }
 
-std::string NATSClient::sub(const std::string& subject) {
-    const auto sub_msg = "SUB " + subject + " 1\r\n";
+void NATSClient::sub(const Subscription& subscription, const MessageHandler& handler) {
+    handlers_.insert({subscription.sid, handler});
+
+    auto sub_msg = "SUB " + subscription.subject;
+    if (subscription.queueGroup.has_value()) {
+        sub_msg += " " + subscription.queueGroup.value();
+    }
+    sub_msg += " " + subscription.sid + "\r\n";
     send(sub_msg);
-    return "1";
 }
 
 void NATSClient::unsub(const std::string& sid) {
@@ -171,8 +182,89 @@ std::expected<NATSInfo, NATSError> NATSClient::parseInfo(std::istream& is) {
     }
 }
 
-void NATSClient::handleMsg(std::istream& is) {
-    std::string msg;
-    std::getline(is, msg);
-    log_(LogLevel::INFO, msg);
+std::function<void()> NATSClient::handleMsg(std::istream& is) {
+    // expected syntax:
+    // MSG <subject> <sid> [reply-to] <#bytes>␍␊
+    std::vector<std::string> tokens;
+    {
+        std::string token;
+        while (is >> token) {
+            tokens.push_back(token);
+        }
+    }
+
+    Message msg;
+    if (tokens.size() > 0) {
+        msg.subject = tokens[0];
+    }
+    if (tokens.size() > 1) {
+        msg.sid = tokens[1];
+    }
+
+    if (tokens.size() > 3) {
+        msg.replyTo = tokens[2];
+        msg.bytes = std::stoi(tokens[3]);
+    } else if (tokens.size() > 2) {
+        msg.bytes = std::stoi(tokens[2]);
+    }
+
+    return [this, msg] {
+        // add two bytes for the CRLF
+        size_t bytes_to_read = msg.bytes + 2;
+        if (bytes_to_read > response_.size()) {
+            bytes_to_read -= response_.size();
+            std::cout << "schedule read of " << bytes_to_read << " bytes" << std::endl;
+            net::async_read(socket_, response_, net::transfer_exactly(bytes_to_read),
+            [this, msg](const boost::system::error_code& ec, std::size_t bytes_transferred) mutable {
+                std::cout << "received msg of " << bytes_transferred << " bytes" << std::endl;
+                if (!ec) {
+                    std::istream response_stream(&response_);
+                    handleMsgPayload(msg, response_stream);
+                    doRead();
+                } else {
+                    onRead(ec, bytes_transferred);
+                }
+            });
+        } else {
+            std::istream response_stream(&response_);
+            handleMsgPayload(msg, response_stream);
+            doRead();
+        }
+    };
+}
+
+void NATSClient::handleMsgPayload(const Message& in, std::istream& is) {
+    ///@todo handle binary data
+    Message msg = in;
+    std::getline(is, msg.payload);
+    if (const auto it = handlers_.find(msg.sid); it != handlers_.end()) {
+        it->second(msg);
+        // handler should stay in the hash table until unsubscribed.
+    } else {
+        log_(LogLevel::INFO, "No handler for message with sid " + msg.sid);
+    }
+}
+
+
+void request(NATSClient& nats_client, const NATSClient::Message& tmplt, const NATSClient::MessageHandler& handler) {
+    const auto replyInbox = "inbox";
+    const NATSClient::Subscription sub = {.subject=replyInbox, .sid = "inbox.1"};
+    nats_client.sub(sub, [&nats_client, sub, handler](const NATSClient::Message& msg) {
+        nats_client.unsub(sub.sid);
+        return handler(msg);
+    });
+    NATSClient::Message msg = tmplt;
+    msg.replyTo = replyInbox;
+    nats_client.pub(msg);
+}
+
+void reply(NATSClient& nats_client, const std::string& subject, const NATSClient::MessageHandler& handler) {
+    nats_client.sub({.subject=subject, .sid = "1"}, [handler, &nats_client](const NATSClient::Message& msg) {
+        NATSClient::Message response = handler(msg);
+        if (msg.replyTo.has_value()) {
+            response.subject = msg.replyTo.value();
+            nats_client.pub(response);
+        }
+        return response;
+    });
 }
