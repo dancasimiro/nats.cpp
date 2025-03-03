@@ -11,10 +11,11 @@ include_directories(${Boost_INCLUDE_DIRS})
 
 include_directories(include)
 
-file(GLOB_RECURSE SOURCES "src/*.cpp")
+add_library(simdjson STATIC src/simdjson.cpp)
+add_library(natscpp STATIC src/nats_client.cpp)
 
-add_executable(repl ${SOURCES})
-target_link_libraries(repl ${Boost_LIBRARIES})
+add_executable(repl src/repl.cpp src/main.cpp)
+target_link_libraries(repl natscpp simdjson ${Boost_LIBRARIES})
 
 enable_testing()
 add_subdirectory(tests)
