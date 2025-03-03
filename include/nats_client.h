@@ -77,7 +77,7 @@ private:
     /// @param is 
     /// @return next operation to perform
     std::function<void()> handleMsg(std::istream& is);
-    void handleMsgPayload(const Message& in, std::istream& is);
+    Message handleMsgPayload(const Message& in);
     /// \endgroup
 
     // async handlers

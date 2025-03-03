@@ -1,5 +1,6 @@
 #include "nats_client.h"
 #include "simdjson.h"
+#include <cassert>
 #include <vector>
 
 NATSClient::NATSClient(net::io_context& io_context, const std::string& host, const std::string& port)
@@ -218,31 +219,34 @@ std::function<void()> NATSClient::handleMsg(std::istream& is) {
             [this, msg](const boost::system::error_code& ec, std::size_t bytes_transferred) mutable {
                 std::cout << "received msg of " << bytes_transferred << " bytes" << std::endl;
                 if (!ec) {
-                    std::istream response_stream(&response_);
-                    handleMsgPayload(msg, response_stream);
+                    handleMsgPayload(msg);
                     doRead();
                 } else {
                     onRead(ec, bytes_transferred);
                 }
             });
         } else {
-            std::istream response_stream(&response_);
-            handleMsgPayload(msg, response_stream);
+            handleMsgPayload(msg);
             doRead();
         }
     };
 }
 
-void NATSClient::handleMsgPayload(const Message& in, std::istream& is) {
-    ///@todo handle binary data
+NATSClient::Message NATSClient::handleMsgPayload(const Message& in) {
+    assert(response_.size() >= (in.bytes + 2));
+
     Message msg = in;
-    std::getline(is, msg.payload);
+    std::istream is(&response_);
+    msg.payload.resize(msg.bytes);
+    is.read(msg.payload.data(), msg.bytes);
+    response_.consume(2); // consume the trailing CRLF
     if (const auto it = handlers_.find(msg.sid); it != handlers_.end()) {
         it->second(msg);
         // handler should stay in the hash table until unsubscribed.
     } else {
         log_(LogLevel::INFO, "No handler for message with sid " + msg.sid);
     }
+    return msg;
 }
 
 
