@@ -6,15 +6,12 @@ project(CPPReplProjectTests)
 # Enable testing
 enable_testing()
 
-# Add the GoogleTest framework
-find_package(GTest REQUIRED)
-include_directories(${GTEST_INCLUDE_DIRS})
+# Add the Catch2 framework
+find_package(Catch2 3 REQUIRED)
+# These tests can use the Catch2-provided main
+add_executable(tests test.cpp)
+target_link_libraries(tests PRIVATE Catch2::Catch2WithMain)
 
-# Add the test executable
-add_executable(repl_test repl_test.cpp)
-
-# Link the test executable against the GoogleTest libraries
-target_link_libraries(repl_test ${GTEST_LIBRARIES} pthread)
-
-# Add a test
-add_test(NAME ReplTest COMMAND repl_test)
+include(CTest)
+include(Catch)
+catch_discover_tests(tests)
