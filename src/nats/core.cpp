@@ -24,19 +24,19 @@ nats::MessageResult nats::Core::handleMsg(std::streambuf& buf) {
         }
     }
 
-    if (tokens.size() < 3 || tokens[0] != "MSG") {
+    if (tokens.size() < 4 || tokens[0] != "MSG") {
         return std::unexpected{Error{"bad syntax"}};
     }
 
     Message msg { .subject=tokens[1], .sid=tokens[2]}; 
     std::string bytes_as_str = "";
-    if (tokens.size() > 4) {
+    if (tokens.size() == 4) {
+        bytes_as_str = tokens[3];
+    } else if (tokens.size() == 5) {
         msg.replyTo = tokens[3];
         bytes_as_str = tokens[4];
-    } else if (tokens.size() > 3) {
-        bytes_as_str = tokens[3];
     } else {
-        return std::unexpected(nats::Error{"missing bytes specifier"});
+        return std::unexpected(nats::Error{"too many tokens"});
     }
     
     std::optional<std::size_t> bytes;
