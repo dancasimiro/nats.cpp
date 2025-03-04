@@ -5,7 +5,7 @@
 #include <ostream>
 #include <boost/asio.hpp>
 #include "logging.h"
-#include "nats_client.h"
+#include "nats/client.h"
 
 namespace net = boost::asio;
 

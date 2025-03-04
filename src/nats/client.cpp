@@ -1,4 +1,5 @@
-#include "nats_client.h"
+#include "nats/client.h"
+#include "nats/stream.h"
 #include "simdjson.h"
 #include <cassert>
 #include <vector>
@@ -60,14 +61,11 @@ void NATSClient::doRead() {
 
 void NATSClient::onRead(const boost::system::error_code& ec, std::size_t bytes_transferred) {
     if (!ec) {
-        std::istream response_stream(&response_);
-        std::string response_line;
-        /// @todo std::getline is likely too naive to handle binary messages
-        if (std::getline(response_stream, response_line)) {
-            evaluateLine(response_line);
-        } else {
-            log_(LogLevel::ERROR, "could not read response line");
+        if (evalResponse()) {
+            log_(LogLevel::ERROR, "could not read response");
             close();
+        } else {
+            doRead();
         }
     } else if (ec == net::error::eof) {
         log_(LogLevel::INFO, "Connection closed by server.");
@@ -78,36 +76,31 @@ void NATSClient::onRead(const boost::system::error_code& ec, std::size_t bytes_t
     }
 }
 
-void NATSClient::evaluateLine(const std::string& line) {
-    std::istringstream is(line);
-    std::string cmd;
-    if (is >> cmd) {
-        if (cmd != "-ERR") {
-            std::function<void()> nextOp = [this] { doRead(); };
-            if (cmd == "+OK") {
-            } else if (cmd == "PING") {
-                pong();
-            } else if (cmd == "MSG") {
-                nextOp = handleMsg(is);
-            } else if (cmd == "INFO") {
-                auto info = handleInfo(is);
-                info.verbose = true;
-                connect(info);
-            } else {
-                log_(LogLevel::INFO, "Received->" + line);
-            }
-            nextOp();
-        } else {
-            std::string error;
-            if (!std::getline(is, error)) {
-                error = "(no error message)";
-            }
-            log_(LogLevel::ERROR, "server error: " + error);
-            close();
-        }
-    } else {
-        log_(LogLevel::INFO, "stream error reading command");
-    }
+bool NATSClient::evalResponse() {
+    auto error = false;
+    const auto next = response_.sgetc();
+    switch (next) {
+    case '+': // +OK
+        handleOk();
+        break;
+    case 'P': // PING
+        handlePing();
+        break;
+    case 'M': // MSG
+        handleMsg();
+        break;
+    case 'I': // INFO
+        handleInfo();
+        break;
+    case '-': // -ERR
+        handleErr();
+        break;
+    default:
+        log_(LogLevel::ERROR, "unexpected character: " + std::to_string(next));
+        error = true;
+        break;
+    };
+    return error;
 }
 void NATSClient::connect(const NATSInfo& info) {
     log_(LogLevel::INFO, "connected to server name " + info.server_name);
@@ -155,12 +148,43 @@ void NATSClient::unsub(const std::string& sid) {
     send(unsub_msg);
 }
 
-NATSInfo NATSClient::handleInfo(std::istream& is) {
-    if (const auto result = parseInfo(is); result.has_value()) {
-        return result.value();
-    } else {
-        log_(LogLevel::ERROR, "error parsing info: " + result.error().message);
-        return NATSInfo{};
+void NATSClient::handleErr() {
+    std::istream is(&response_);
+    std::string cmd;
+    std::getline(is, cmd);
+    log_(LogLevel::INFO, cmd);
+}
+
+void NATSClient::handleOk() {
+    std::istream is(&response_);
+    std::string cmd;
+    std::getline(is, cmd);
+    log_(LogLevel::INFO, cmd);
+}
+
+void NATSClient::handleInfo() {
+    std::istream is(&response_);
+    std::string cmd;
+    is >> cmd;
+    log_(LogLevel::INFO, cmd);
+    if (cmd == "INFO") {
+        if (const auto result = parseInfo(is); result.has_value()) {
+            auto info = result.value();
+            info.verbose = true;
+            connect(info);
+        } else {
+            log_(LogLevel::ERROR, "error parsing info: " + result.error().message);
+        }
+    }
+}
+
+void NATSClient::handlePing() {
+    std::istream is(&response_);
+    std::string cmd;
+    std::getline(is, cmd);
+    log_(LogLevel::INFO, cmd);
+    if (cmd == "PING") {
+        pong();
     }
 }
 
@@ -183,63 +207,65 @@ std::expected<NATSInfo, NATSError> NATSClient::parseInfo(std::istream& is) {
     }
 }
 
-std::function<void()> NATSClient::handleMsg(std::istream& is) {
-    // expected syntax:
-    // MSG <subject> <sid> [reply-to] <#bytes>␍␊
-    std::vector<std::string> tokens;
-    {
-        std::string token;
-        while (is >> token) {
-            tokens.push_back(token);
-        }
-    }
-
-    Message msg;
-    if (tokens.size() > 0) {
-        msg.subject = tokens[0];
-    }
-    if (tokens.size() > 1) {
-        msg.sid = tokens[1];
-    }
-
-    if (tokens.size() > 3) {
-        msg.replyTo = tokens[2];
-        msg.bytes = std::stoi(tokens[3]);
-    } else if (tokens.size() > 2) {
-        msg.bytes = std::stoi(tokens[2]);
-    }
-
-    return [this, msg] {
-        // add two bytes for the CRLF
-        size_t bytes_to_read = msg.bytes + 2;
-        if (bytes_to_read > response_.size()) {
-            bytes_to_read -= response_.size();
-            std::cout << "schedule read of " << bytes_to_read << " bytes" << std::endl;
-            net::async_read(socket_, response_, net::transfer_exactly(bytes_to_read),
-            [this, msg](const boost::system::error_code& ec, std::size_t bytes_transferred) mutable {
-                std::cout << "received msg of " << bytes_transferred << " bytes" << std::endl;
-                if (!ec) {
-                    handleMsgPayload(msg);
-                    doRead();
-                } else {
-                    onRead(ec, bytes_transferred);
-                }
-            });
+void NATSClient::handleMsg() {
+    log_(LogLevel::INFO, "MSG");
+    if (const auto result = core_.handleMsg(response_); result.has_value()) {
+        const auto& ok = result.value();
+        if (std::holds_alternative<Message>(ok)) {
+            handleMsgPayload(std::get<Message>(ok));
+        } else if (std::holds_alternative<nats::MessageNeedsMoreData>(ok)) {
+            const auto& nmd = std::get<nats::MessageNeedsMoreData>(ok);
+            if (nmd.bytes.has_value()) {
+                log_(LogLevel::INFO, "need " + std::to_string(nmd.bytes.value()) + " more bytes.");
+            }
+            log_(LogLevel::ERROR, "need to implement support for partial reads. " + to_string(nmd));
+            close();
         } else {
-            handleMsgPayload(msg);
-            doRead();
+            log_(LogLevel::ERROR, "unhandled type");
+            close();
         }
-    };
+    } else {
+        log_(LogLevel::ERROR, "stream error reading message: " + result.error().what);
+        close();
+    }
 }
+// nats::MessageResult NATSClient::handleMsg() {
+//     // expected syntax:
+//     // MSG <subject> <sid> [reply-to] <#bytes>␍␊
+//     if (const auto result = core_.handleMsg(response_); result.has_value()) {
+//         return [this, result] {
+//             const auto& ok = result.value();
+//             if (std::holds_alternative<Message>(ok)) {
+//                 handleMsgPayload(std::get<Message>(ok));
+//                 doRead();
+//             } else if (std::holds_alternative<nats::MessageNeedsMoreData>(ok)) {
+//                 const auto& nmd = std::get<nats::MessageNeedsMoreData>(ok);
+//                 if (nmd.bytes.has_value()) {
+//                     net::async_read(socket_, response_, net::transfer_exactly(nmd.bytes.value()),
+//                         [this, msg=nmd.partial](const boost::system::error_code& ec, std::size_t bytes_transferred) mutable {
+//                             std::cout << "received msg of " << bytes_transferred << " bytes" << std::endl;
+//                             if (!ec) {
+//                                 handleMsgPayload(msg);
+//                                 doRead();
+//                             } else {
+//                                 onRead(ec, bytes_transferred);
+//                             }
+//                         });
+//                 } else {
+//                     // unhandled!
+//                 }
+//             } else {
+//                 // unhandled!
+//             }
+//         };
+//     } else {
+//         // unhandled!
+//     }
+//     return []{};
+// }
 
-NATSClient::Message NATSClient::handleMsgPayload(const Message& in) {
-    assert(response_.size() >= (in.bytes + 2));
-
-    Message msg = in;
-    std::istream is(&response_);
-    msg.payload.resize(msg.bytes);
-    is.read(msg.payload.data(), msg.bytes);
-    response_.consume(2); // consume the trailing CRLF
+Message NATSClient::handleMsgPayload(const Message& msg) {
+    log_(LogLevel::INFO, to_string(msg));
     if (const auto it = handlers_.find(msg.sid); it != handlers_.end()) {
         it->second(msg);
         // handler should stay in the hash table until unsubscribed.
@@ -250,21 +276,21 @@ NATSClient::Message NATSClient::handleMsgPayload(const Message& in) {
 }
 
 
-void request(NATSClient& nats_client, const NATSClient::Message& tmplt, const NATSClient::MessageHandler& handler) {
+void request(NATSClient& nats_client, const nats::Message& tmplt, const NATSClient::MessageHandler& handler) {
     const auto replyInbox = "inbox";
     const NATSClient::Subscription sub = {.subject=replyInbox, .sid = "inbox.1"};
-    nats_client.sub(sub, [&nats_client, sub, handler](const NATSClient::Message& msg) {
+    nats_client.sub(sub, [&nats_client, sub, handler](const nats::Message& msg) {
         nats_client.unsub(sub.sid);
         return handler(msg);
     });
-    NATSClient::Message msg = tmplt;
+    auto msg = tmplt;
     msg.replyTo = replyInbox;
     nats_client.pub(msg);
 }
 
 void reply(NATSClient& nats_client, const std::string& subject, const NATSClient::MessageHandler& handler) {
-    nats_client.sub({.subject=subject, .sid = "1"}, [handler, &nats_client](const NATSClient::Message& msg) {
-        NATSClient::Message response = handler(msg);
+    nats_client.sub({.subject=subject, .sid = "1"}, [handler, &nats_client](const nats::Message& msg) {
+        auto response = handler(msg);
         if (msg.replyTo.has_value()) {
             response.subject = msg.replyTo.value();
             nats_client.pub(response);

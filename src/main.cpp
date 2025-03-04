@@ -1,6 +1,6 @@
-#include <iostream>
+#include "nats/client.h"
 #include "repl.h"
-#include "nats_client.h"
+#include <iostream>
 
 int main() {
     net::io_context io_context;

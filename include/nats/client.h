@@ -2,6 +2,7 @@
 #define NATS_CLIENT_H
 
 #include "logging.h"
+#include "core.h"
 
 #include <boost/asio.hpp>
 #include <expected>
@@ -14,6 +15,9 @@
 
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
+using nats::Message;
+using nats::MessageResult;
+using nats::Core;
 
 struct NATSError {
     std::string message;
@@ -38,14 +42,6 @@ public:
 
     ///
     /// \begingroup NATS core public client API
-    struct Message {
-        std::string subject;
-        std::string sid;
-        std::optional<std::string> replyTo;
-        std::size_t bytes = 0;
-        std::string payload;
-    };
-
     void pub( const Message& msg);
     void hpub(const std::string& subject);
 
@@ -70,14 +66,20 @@ private:
     void pong();
     /// \endgroup
 
+    /// returns false on success
+    bool evalResponse();
+
     ///
     /// \begingroup handlers for NATS server APIs
-    NATSInfo handleInfo(std::istream& is);
+    void handleErr();
+    void handleOk();
+    void handleInfo();
+    void handleMsg();
+    void handlePing();
     /// @brief
     /// @param is 
     /// @return next operation to perform
-    std::function<void()> handleMsg(std::istream& is);
-    Message handleMsgPayload(const Message& in);
+    Message handleMsgPayload(const Message& msg);
     /// \endgroup
 
     // async handlers
@@ -85,7 +87,7 @@ private:
     void onWrite(const boost::system::error_code& ec, std::size_t bytes_transferred);
     void doRead();
     void onRead(const boost::system::error_code& ec, std::size_t bytes_transferred);
-    void evaluateLine(const std::string& line);
+
     std::expected<NATSInfo, NATSError> parseInfo(std::istream& is);
 
     net::io_context& io_context_;
@@ -94,6 +96,7 @@ private:
     std::string host_;
     std::string port_;
     boost::asio::streambuf response_;
+    Core core_;
     Logger log_;
 
     /// the subscription key is a tuple of the subject and the sid.
@@ -101,7 +104,7 @@ private:
     std::unordered_map<std::string, MessageHandler> handlers_;
 };
 
-void request(NATSClient& nats_client, const NATSClient::Message& msg, const NATSClient::MessageHandler& handler);
+void request(NATSClient& nats_client, const Message& msg, const NATSClient::MessageHandler& handler);
 void reply(NATSClient& nats_client, const std::string& subject, const NATSClient::MessageHandler& handler);
 
 #endif // NATS_CLIENT_H

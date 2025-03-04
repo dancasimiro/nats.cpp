@@ -74,9 +74,9 @@ bool REPL::evaluate(std::istream &is) {
             stop_reading = true;
         } else if (input == "sub") {
             const auto subject = tokens.size() > 1 ? tokens[1] : "foo";
-            nats_client_.sub({.subject=subject, .sid="1"}, [](const NATSClient::Message& msg) {
+            nats_client_.sub({.subject=subject, .sid="1"}, [](const nats::Message& msg) {
                 std::cout << "Received message: " << msg.payload << std::endl;
-                return NATSClient::Message{};
+                return nats::Message{};
             });
         } else if (input == "unsub") {
             nats_client_.unsub("1");
@@ -95,9 +95,9 @@ bool REPL::evaluate(std::istream &is) {
             request(nats_client_, {
                 .subject=tokens.size() > 1 ? tokens[1] : "foo",
                 .payload=tokens.size() > 2 ? tokens[2] : "hello"},
-                [logger](const NATSClient::Message& msg) {
+                [logger](const nats::Message& msg) {
                     logger(LogLevel::INFO, "Received reply: " + msg.payload);
-                    return NATSClient::Message{};
+                    return nats::Message{};
             });
         } else if (input == "reply") {
             const auto subject = tokens.size() > 1 ? tokens[1] : "foo";
@@ -106,9 +106,9 @@ bool REPL::evaluate(std::istream &is) {
             const auto logger = [this](LogLevel level, const std::string& msg) {
                 print(level, msg);
             };
-            reply(nats_client_, subject, [payload, logger](const NATSClient::Message& msg) {
+            reply(nats_client_, subject, [payload, logger](const nats::Message& msg) {
                 logger(LogLevel::INFO, "Received request: " + msg.payload);
-                return NATSClient::Message{.payload = payload};
+                return nats::Message{.payload = payload};
             });
         } else {
             std::cerr << "Unknown command: " << input << std::endl;
