@@ -2,7 +2,7 @@
 #define REPL_H
 
 #include <string>
-#include <ostream>
+#include <istream>
 #include <boost/asio.hpp>
 #include "logging.h"
 #include "nats/client.h"

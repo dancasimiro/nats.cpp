@@ -1,8 +1,6 @@
 #include "nats/client.h"
 #include "nats/stream.h"
 #include "simdjson.h"
-#include <cassert>
-#include <vector>
 
 NATSClient::NATSClient(net::io_context& io_context, const std::string& host, const std::string& port)
     : io_context_(io_context), resolver_(io_context), socket_(io_context), host_(host), port_(port) {}

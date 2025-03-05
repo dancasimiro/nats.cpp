@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <expected>
 #include <optional>
-#include <ostream>
 #include <streambuf>
 #include <string>
 #include <variant>
