@@ -1,68 +1,11 @@
 #ifndef NATS_CORE_H
 #define NATS_CORE_H
 
-#include <cstddef>
-#include <expected>
-#include <optional>
+#include "types.h"
 #include <streambuf>
 #include <string>
-#include <variant>
 
 namespace nats {
-
-struct Message {
-    std::string subject;
-    std::string sid;
-    std::optional<std::string> replyTo;
-    std::size_t bytes = 0;
-    std::string payload;
-};
-
-inline bool operator!=(const Message& lhs, const Message& rhs) {
-    return lhs.bytes != rhs.bytes ||
-        lhs.subject != rhs.subject ||
-        lhs.sid != rhs.sid ||
-        lhs.payload != rhs.payload ||
-        lhs.replyTo != rhs.replyTo;
-}
-
-inline bool operator==(const Message& lhs, const Message& rhs) {
-    return !(lhs != rhs);
-}
-
-/// @brief  more data is needed to finish parsing
-///
-/// 'bytes' is present when the exact number of additional bytes is known.
-/// otherwise, it generally means that the first \r\n has not been encountered.
-struct MessageNeedsMoreData {
-    std::optional<std::size_t> bytes;
-    Message partial;
-};
-
-inline bool operator!=(const MessageNeedsMoreData& lhs, const MessageNeedsMoreData& rhs) {
-    return lhs.bytes != rhs.bytes ||
-        lhs.partial != rhs.partial;
-}
-
-inline bool operator==(const MessageNeedsMoreData& lhs, const MessageNeedsMoreData& rhs) {
-    return !(lhs != rhs);
-}
-
-typedef std::variant<Message, MessageNeedsMoreData> OkMessage;
-
-struct Error {
-    std::string what;
-};
-
-inline bool operator!=(const Error& lhs, const Error& rhs) {
-    return false;
-}
-
-inline bool operator==(const Error& lhs, const Error& rhs) {
-    return !(lhs != rhs);
-}
-
-typedef std::expected<OkMessage, Error> MessageResult;
 
 class Core {
 public:

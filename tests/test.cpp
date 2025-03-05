@@ -1,4 +1,5 @@
 #include "nats/core.h"
+#include "nats/operators.h"
 #include "nats/stream.h"
 
 #include <boost/asio.hpp>
