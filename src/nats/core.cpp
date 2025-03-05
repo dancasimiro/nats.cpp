@@ -56,10 +56,6 @@ nats::MessageResult nats::Core::handleMsg(std::streambuf& buf) {
 }
 
 nats::Message nats::Core::completeMsg(std::streambuf& buf, Message&& in) {
-    // if (buf.in_avail() < (in.bytes + 2)) {
-    //     return std::unexpected(in.bytes + 2 - buf.in_avail());
-    // }
-
     assert(buf.in_avail() >= (in.bytes + 2));
 
     auto msg = in;
@@ -71,11 +67,5 @@ nats::Message nats::Core::completeMsg(std::streambuf& buf, Message&& in) {
     buf.sbumpc();
     buf.sbumpc();
 
-    // if (const auto it = handlers_.find(msg.sid); it != handlers_.end()) {
-    //     it->second(msg);
-    //     // handler should stay in the hash table until unsubscribed.
-    // } else {
-    //     log_(LogLevel::INFO, "No handler for message with sid " + msg.sid);
-    // }
     return msg;
 }
