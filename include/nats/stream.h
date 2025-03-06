@@ -1,7 +1,7 @@
 #ifndef NATS_STREAM_H
 #define NATS_STREAM_H
 
-#include "core.h"
+#include "types.h"
 #include <ostream>
 #include <string>
 #include <optional>

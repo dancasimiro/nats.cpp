@@ -1,6 +1,7 @@
 #ifndef NATS_OPERATORS_H
 #define NATS_OPERATORS_H
 
+#include "types.h"
 #include <string>
 #include <optional>
 #include <vector>
