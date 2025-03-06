@@ -29,6 +29,8 @@ public:
     MessageResult handleMsg(std::streambuf& is);
     //std::expected<Message, std::size_t> completeMsg(std::streambuf& is, const Message& msg);
 
+    /// @brief Process info from the NATS server
+    InfoResult handleInfo(std::streambuf& is);
 private:
     Message completeMsg(std::streambuf& is, Message&& msg);
 };

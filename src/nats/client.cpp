@@ -1,6 +1,5 @@
 #include "nats/client.h"
 #include "nats/stream.h"
-#include "simdjson.h"
 
 NATSClient::NATSClient(net::io_context& io_context, const std::string& host, const std::string& port)
     : io_context_(io_context), resolver_(io_context), socket_(io_context), host_(host), port_(port) {}
@@ -118,8 +117,8 @@ void NATSClient::pong() {
 
 void NATSClient::pub(const Message& msg) {
     auto pub_msg = "PUB " + msg.subject;
-    if (msg.replyTo.has_value()) {
-        pub_msg += " " + *msg.replyTo;
+    if (msg.reply_to.has_value()) {
+        pub_msg += " " + *msg.reply_to;
     }
     pub_msg += " " + std::to_string(msg.payload.size()) + "\r\n" + msg.payload + "\r\n";
     send(pub_msg);
@@ -166,12 +165,10 @@ void NATSClient::handleInfo() {
     is >> cmd;
     log_(LogLevel::INFO, cmd);
     if (cmd == "INFO") {
-        if (const auto result = parseInfo(is); result.has_value()) {
-            auto info = result.value();
-            info.verbose = true;
-            connect(info);
+        if (const auto result = core_.handleInfo(response_); result.has_value()) {
+            connect(result.value());
         } else {
-            log_(LogLevel::ERROR, "error parsing info: " + result.error().message);
+            log_(LogLevel::ERROR, "bad info> " + result.error().what);
         }
     }
 }
@@ -186,27 +183,7 @@ void NATSClient::handlePing() {
     }
 }
 
-std::expected<NATSInfo, NATSError> NATSClient::parseInfo(std::istream& is) {
-    std::string info_json;
-    if (!std::getline(is, info_json)) {
-        return std::unexpected(NATSError{"info payload stream error"});
-    }
-
-    simdjson::ondemand::document doc;
-    simdjson::ondemand::parser parser;
-    try {
-        simdjson::padded_string payload(info_json);
-        doc = parser.iterate(payload);
-        return NATSInfo{.server_name{std::string_view(doc["server_name"])}};
-    } catch (simdjson::simdjson_error& error) {
-        const char* current_location = doc.current_location();
-        log_(LogLevel::ERROR, "JSON error: " + std::string(error.what()) + " near " + current_location + " in " + info_json);
-        return std::unexpected(NATSError{error.what()});
-    }
-}
-
 void NATSClient::handleMsg() {
-    log_(LogLevel::INFO, "MSG");
     if (const auto result = core_.handleMsg(response_); result.has_value()) {
         const auto& ok = result.value();
         if (std::holds_alternative<Message>(ok)) {
@@ -282,15 +259,15 @@ void request(NATSClient& nats_client, const nats::Message& tmplt, const NATSClie
         return handler(msg);
     });
     auto msg = tmplt;
-    msg.replyTo = replyInbox;
+    msg.reply_to = replyInbox;
     nats_client.pub(msg);
 }
 
 void reply(NATSClient& nats_client, const std::string& subject, const NATSClient::MessageHandler& handler) {
     nats_client.sub({.subject=subject, .sid = "1"}, [handler, &nats_client](const nats::Message& msg) {
         auto response = handler(msg);
-        if (msg.replyTo.has_value()) {
-            response.subject = msg.replyTo.value();
+        if (msg.reply_to.has_value()) {
+            response.subject = msg.reply_to.value();
             nats_client.pub(response);
         }
         return response;

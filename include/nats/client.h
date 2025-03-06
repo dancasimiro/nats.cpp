@@ -17,18 +17,7 @@ using tcp = net::ip::tcp;
 using nats::Message;
 using nats::MessageResult;
 using nats::Core;
-
-struct NATSError {
-    std::string message;
-};
-
-struct NATSInfo {
-    std::string server_name;
-    std::string server_id;
-    std::optional<std::string> nonce;
-    std::vector<std::string> connect_urls;
-    bool verbose = false;
-};
+typedef nats::Info NATSInfo;
 
 class NATSClient {
 public:
@@ -86,8 +75,6 @@ private:
     void onWrite(const boost::system::error_code& ec, std::size_t bytes_transferred);
     void doRead();
     void onRead(const boost::system::error_code& ec, std::size_t bytes_transferred);
-
-    std::expected<NATSInfo, NATSError> parseInfo(std::istream& is);
 
     net::io_context& io_context_;
     tcp::resolver resolver_;

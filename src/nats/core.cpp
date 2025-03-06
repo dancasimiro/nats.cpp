@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "simdjson.h"
+
 nats::MessageResult nats::Core::handleMsg(std::streambuf& buf) {
     // expected syntax:
     // MSG <subject> <sid> [reply-to] <#bytes>␍␊
@@ -33,7 +35,7 @@ nats::MessageResult nats::Core::handleMsg(std::streambuf& buf) {
     if (tokens.size() == 4) {
         bytes_as_str = tokens[3];
     } else if (tokens.size() == 5) {
-        msg.replyTo = tokens[3];
+        msg.reply_to = tokens[3];
         bytes_as_str = tokens[4];
     } else {
         return std::unexpected(nats::Error{"too many tokens"});
@@ -68,4 +70,102 @@ nats::Message nats::Core::completeMsg(std::streambuf& buf, Message&& in) {
     buf.sbumpc();
 
     return msg;
+}
+
+nats::InfoResult nats::Core::handleInfo(std::streambuf& buf) {
+    std::istream is(&buf);
+    std::string cmd_name;
+    is >> cmd_name;
+    if (!is || cmd_name != "INFO") {
+        return std::unexpected(Error("bad syntax"));
+    }
+
+    std::string info_json;
+    char ch;
+    while (is.get(ch)) {
+        info_json += ch;
+        if (info_json.size() >= 2 && info_json.substr(info_json.size() - 2) == "\r\n") {
+            break;
+        }
+    }
+
+    if (info_json.size() < 2 || info_json.substr(info_json.size() - 2) != "\r\n") {
+        return std::unexpected(Error{"bad syntax"});
+    }
+
+    // Remove the trailing \r\n
+    info_json.erase(info_json.size() - 2);
+
+    std::string last_key;
+    simdjson::dom::parser parser;
+    try {
+        simdjson::dom::element doc = parser.parse(simdjson::pad(info_json));
+        Info info;
+
+        for (auto [key, value] : doc.get_object()) {
+            last_key = key;
+            if (key == "server_id") {
+                info.server_id = std::string_view(value);
+            } else if (key == "server_name") {
+                info.server_name = std::string_view(value);
+            } else if (key == "version") {
+                info.version = std::string_view(value);
+            } else if (key == "go") {
+                info.go = std::string_view(value);
+            } else if (key == "host") {
+                info.host = std::string_view(value);
+            } else if (key == "port") {
+                info.port = int64_t(value);
+            } else if (key == "headers") {
+                info.headers = bool(value);
+            } else if (key == "max_payload") {
+                info.max_payload = int64_t(value);
+            } else if (key == "proto") {
+                info.proto = int64_t(value);
+            } else if (key == "client_id") {
+                info.client_id = uint64_t(value);
+            } else if (key == "auth_required") {
+                info.auth_required = bool(value);
+            } else if (key == "tls_required") {
+                info.tls_required = bool(value);
+            } else if (key == "tls_verified") {
+                info.tls_verified = bool(value);
+            } else if (key == "tls_available") {
+                info.tls_available = bool(value);
+            } else if (key == "connect_urls") {
+                std::vector<std::string> urls;
+                for (auto url : value.get_array()) {
+                    urls.emplace_back(std::string_view(url));
+                }
+                info.connect_urls = urls;
+            } else if (key == "ws_connect_urls") {
+                std::vector<std::string> urls;
+                for (auto url : value.get_array()) {
+                    urls.emplace_back(std::string_view(url));
+                }
+                info.ws_connect_urls = urls;
+            } else if (key == "ldm") {
+                info.ldm = bool(value);
+            } else if (key == "git_commit") {
+                info.git_commit = std::string_view(value);
+            } else if (key == "jetstream") {
+                info.jetstream = bool(value);
+            } else if (key == "ip") {
+                info.ip = std::string_view(value);
+            } else if (key == "client_ip") {
+                info.client_ip = std::string_view(value);
+            } else if (key == "nonce") {
+                info.nonce = std::string_view(value);
+            } else if (key == "cluster") {
+                info.cluster = std::string_view(value);
+            } else if (key == "domain") {
+                info.domain = std::string_view(value);
+            }
+        }
+
+        return info;
+    } catch (simdjson::simdjson_error& error) {
+        const std::string detail = "JSON error: " + std::string(error.what()) + " near " + last_key + " in " + info_json;
+        return std::unexpected(Error{detail});
+    }
 }
