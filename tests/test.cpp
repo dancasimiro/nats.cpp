@@ -268,6 +268,30 @@ TEST_CASE( "Arrays", "[info]" ) {
             }));
 }
 
+TEST_CASE( "Missing Required", "[info]" ) {
+    nats::Core core;
+
+    boost::asio::streambuf buf;
+    std::ostream os(&buf);
+    os << "INFO " <<
+    R"(
+     {
+      "server_id":"NAGGEW65XCMGPSNNQQF6FGKDGQCCXZFMHDI264FXBLT5MURRVDAAKII3",
+      "x_server_name":"us-south-nats-demo",
+      "version":"2.10.26",
+      "go":"go1.23.6",
+      "host":"0.0.0.0",
+      "port":4222,
+      "headers":true,
+      "max_payload":1048576,
+      "proto":1
+     }
+    )" << "\r\n";
+
+    const auto result = core.handleInfo(buf);
+    REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
 TEST_CASE( "Unexpected Connect URLs type", "[info]" ) {
     nats::Core core;
 

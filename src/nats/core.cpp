@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <istream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -102,8 +103,15 @@ nats::InfoResult nats::Core::handleInfo(std::streambuf& buf) {
         simdjson::dom::element doc = parser.parse(simdjson::pad(info_json));
         Info info;
 
+        // Set of required keys
+        std::set<std::string> required_keys = {
+            "server_id", "server_name", "version", "go", "host", "port", "headers", "max_payload", "proto"
+        };
+
         for (auto [key, value] : doc.get_object()) {
             last_key = key;
+            required_keys.erase(std::string(key)); // Remove the key from the set of required keys
+
             if (key == "server_id") {
                 info.server_id = std::string_view(value);
             } else if (key == "server_name") {
@@ -161,6 +169,17 @@ nats::InfoResult nats::Core::handleInfo(std::streambuf& buf) {
             } else if (key == "domain") {
                 info.domain = std::string_view(value);
             }
+        }
+
+        // Check if any required keys are missing
+        if (!required_keys.empty()) {
+            std::string missing_keys;
+            for (const auto& key : required_keys) {
+                missing_keys += key + ", ";
+            }
+            missing_keys.pop_back(); // Remove the trailing space
+            missing_keys.pop_back(); // Remove the trailing comma
+            return std::unexpected(Error{"missing required keys: " + missing_keys});
         }
 
         return info;
