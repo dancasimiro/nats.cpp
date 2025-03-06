@@ -6,6 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_templated.hpp>
 #include <expected>
+#include <set>
+#include <string>
+#include <sstream>
 struct ExpectedMessageMatcher : Catch::Matchers::MatcherGenericBase {
     ExpectedMessageMatcher(const nats::Message& msg) : expected { msg }
     {}
@@ -276,15 +279,7 @@ TEST_CASE( "Missing Required", "[info]" ) {
     os << "INFO " <<
     R"(
      {
-      "server_id":"NAGGEW65XCMGPSNNQQF6FGKDGQCCXZFMHDI264FXBLT5MURRVDAAKII3",
-      "x_server_name":"us-south-nats-demo",
-      "version":"2.10.26",
-      "go":"go1.23.6",
-      "host":"0.0.0.0",
-      "port":4222,
-      "headers":true,
-      "max_payload":1048576,
-      "proto":1
+      "server_id":"NAGGEW65XCMGPSNNQQF6FGKDGQCCXZFMHDI264FXBLT5MURRVDAAKII3"
      }
     )" << "\r\n";
 
@@ -347,4 +342,48 @@ TEST_CASE( "Bad JSON", "[info]" ) {
 
     const auto result = core.handleInfo(buf);
     REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
+// Helper function to generate JSON string with one required key removed
+std::string generate_json_with_missing_key(const std::set<std::string>& required_keys, const std::string& key_to_remove) {
+    std::ostringstream os;
+    os << R"({
+      "server_id":"NAGGEW65XCMGPSNNQQF6FGKDGQCCXZFMHDI264FXBLT5MURRVDAAKII3",
+      "server_name":"us-south-nats-demo",
+      "version":"2.10.26",
+      "go":"go1.23.6",
+      "host":"0.0.0.0",
+      "port":4222,
+      "headers":true,
+      "max_payload":1048576,
+      "proto":1
+    )";
+
+    std::string json = os.str();
+    size_t pos = json.find("\"" + key_to_remove + "\":");
+    if (pos != std::string::npos) {
+        size_t end_pos = json.find(",", pos);
+        if (end_pos == std::string::npos) {
+            end_pos = json.find("}", pos);
+        }
+        json.erase(pos, end_pos - pos + 1);
+    }
+    return json;
+}
+
+TEST_CASE("Missing Required Keys", "[info]") {
+    nats::Core core;
+
+    std::set<std::string> required_keys = {
+        "server_id", "server_name", "version", "go", "host", "port", "headers", "max_payload", "proto"
+    };
+
+    for (const auto& key : required_keys) {
+        boost::asio::streambuf buf;
+        std::ostream os(&buf);
+        os << "INFO " << generate_json_with_missing_key(required_keys, key) << "\r\n";
+
+        const auto result = core.handleInfo(buf);
+        REQUIRE_THAT(result, HasExpectedError(nats::Error{"missing required keys: " + key}));
+    }
 }
