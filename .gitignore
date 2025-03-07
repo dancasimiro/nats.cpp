@@ -1,2 +1,3 @@
 build
 .vscode
+nats.cpp.code-workspace
