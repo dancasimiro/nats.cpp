@@ -26,8 +26,8 @@ public:
     ///
     /// @param is This buffer contains the bytes received from the server.
     /// @return A tuple containing the message and the number of bytes required to complete the message.
-    MessageResult handleMsg(std::streambuf& is);
-    //std::expected<Message, std::size_t> completeMsg(std::streambuf& is, const Message& msg);
+    MessageResult handleMsg(std::streambuf& buf);
+    std::expected<Message, Error> handleMsgCompletion(std::streambuf& buf, MessageNeedsMoreData&& nmd);
 
     /// @brief Process info from the NATS server
     InfoResult handleInfo(std::streambuf& is);

@@ -127,10 +127,26 @@ TEST_CASE( "Payload Continuation", "[message]" ) {
     
     boost::asio::streambuf buf;
     std::ostream os(&buf);
-    os << "MSG test.subject 10 3\r\nh";
+    REQUIRE(os << "MSG test.subject 10 3\r\nh" << std::flush);
 
     const auto result = core.handleMsg(buf);
     REQUIRE_THAT(result, HasExpectedNeedMoreData(nats::MessageNeedsMoreData{4, nats::Message{"test.subject", "10", std::nullopt, 3, ""}}));
+    REQUIRE(buf.in_avail() == 1);
+
+    REQUIRE(os.good());
+    REQUIRE(os << "i!\r\n" << std::flush);
+
+    // I don't understand why this commit(0) is called. I expected that
+    // 'os' would have taken care of this. The data is there obviously.
+    // because commit(4), which is the number of bytes streamed above results
+    // in a double commit, and buf.in_avail() == 9.
+    buf.commit(0); //< weird!!!
+
+    REQUIRE(buf.in_avail() == 5);
+    auto nmd = std::get<nats::MessageNeedsMoreData>(result.value());
+    REQUIRE(nmd.partial.bytes == 3);
+    const auto completion = core.handleMsgCompletion(buf, std::move(nmd));
+    REQUIRE_THAT(completion, HasExpectedMessage(nats::Message{"test.subject", "10", std::nullopt, 3, "hi!"}));
 }
 
 TEST_CASE( "Malformed Bytes", "[message]" ) {

@@ -73,6 +73,21 @@ nats::Message nats::Core::completeMsg(std::streambuf& buf, Message&& in) {
     return msg;
 }
 
+std::expected<nats::Message, nats::Error>
+nats::Core::handleMsgCompletion(std::streambuf& buf, nats::MessageNeedsMoreData&& nmd) {
+    assert(buf.in_avail() >= (nmd.partial.bytes + 2));
+
+    std::istream is(&buf);
+    nmd.partial.payload.resize(nmd.partial.bytes);
+    is.read(nmd.partial.payload.data(), nmd.partial.bytes);
+
+    // consume the trailing CRLF (2 bytes)
+    buf.sbumpc();
+    buf.sbumpc();
+
+    return nmd.partial;
+}
+
 nats::InfoResult nats::Core::handleInfo(std::streambuf& buf) {
     std::istream is(&buf);
     std::string cmd_name;

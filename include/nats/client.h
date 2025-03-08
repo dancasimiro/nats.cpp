@@ -55,14 +55,16 @@ private:
     /// \endgroup
 
     /// returns false on success
-    bool evalResponse();
+    typedef std::variant<nats::Ok, nats::MessageNeedsMoreData> ResponseSuccessType;
+    typedef std::expected<ResponseSuccessType, nats::Error> RespResult;
+    RespResult evalResponse();
 
     ///
     /// \begingroup handlers for NATS server APIs
-    void handleErr();
-    void handleOk();
+    nats::Error handleErr();
+    nats::Ok handleOk();
     void handleInfo();
-    void handleMsg();
+    RespResult handleMsg();
     void handlePing();
     /// @brief
     /// @param is 
@@ -75,6 +77,7 @@ private:
     void onWrite(const boost::system::error_code& ec, std::size_t bytes_transferred);
     void doRead();
     void onRead(const boost::system::error_code& ec, std::size_t bytes_transferred);
+    void onCompleteMsg(const boost::system::error_code& ec, std::size_t bytes_transferred, nats::MessageNeedsMoreData&& nmd);
 
     net::io_context& io_context_;
     tcp::resolver resolver_;

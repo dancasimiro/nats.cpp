@@ -11,6 +11,10 @@
 
 namespace nats {
 
+struct Ok {
+
+};
+
 struct Error {
     std::string what;
 };

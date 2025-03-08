@@ -58,11 +58,29 @@ void NATSClient::doRead() {
 
 void NATSClient::onRead(const boost::system::error_code& ec, std::size_t bytes_transferred) {
     if (!ec) {
-        if (evalResponse()) {
-            log_(LogLevel::ERROR, "could not read response");
-            close();
+        if (auto rslt = evalResponse(); rslt.has_value()) {
+            if (std::holds_alternative<nats::Ok>(rslt.value())) {
+                doRead();
+            } else if (std::holds_alternative<nats::MessageNeedsMoreData>(rslt.value())) {
+                auto nmd = std::get<nats::MessageNeedsMoreData>(rslt.value());
+                if (nmd.bytes.has_value()) {
+                    net::async_read(socket_, response_, net::transfer_exactly(nmd.bytes.value()),
+                        [this, nmd](const boost::system::error_code &ec, std::size_t bytes_transferred) mutable {
+                            onCompleteMsg(ec, bytes_transferred, std::move(nmd));
+                        });
+                } else {
+                    // not enough of the MSG was read to determine the expected number of bytes.
+                    // This is not expected because doRead is supposed to read until the \r\n.
+                    log_(LogLevel::ERROR, "read partial message without decoding bytes expected.");
+                    close();
+                }
+            } else {
+                log_(LogLevel::ERROR, "unexpected variant type onRead");
+                close();
+            }
         } else {
-            doRead();
+            log_(LogLevel::ERROR, rslt.error().what);
+            close();
         }
     } else if (ec == net::error::eof) {
         log_(LogLevel::INFO, "Connection closed by server.");
@@ -73,31 +91,46 @@ void NATSClient::onRead(const boost::system::error_code& ec, std::size_t bytes_t
     }
 }
 
-bool NATSClient::evalResponse() {
-    auto error = false;
+void NATSClient::onCompleteMsg(const boost::system::error_code& ec, std::size_t bytes_transferred,
+    nats::MessageNeedsMoreData&& nmd) {
+    if (!ec) {
+        if (auto rslt = core_.handleMsgCompletion(response_, std::move(nmd)); rslt.has_value()) {
+            handleMsgPayload(rslt.value());
+        } else {
+            log_(LogLevel::ERROR, rslt.error().what);
+        }
+    } else {
+        // reuse error handling in onRead.
+        onRead(ec, bytes_transferred);
+    }
+}
+
+NATSClient::RespResult NATSClient::evalResponse() {
+    RespResult rslt;
     const auto next = response_.sgetc();
     switch (next) {
     case '+': // +OK
-        handleOk();
+        rslt = handleOk();
         break;
     case 'P': // PING
         handlePing();
+        rslt = nats::Ok{};
         break;
     case 'M': // MSG
-        handleMsg();
+        rslt = handleMsg();
         break;
     case 'I': // INFO
         handleInfo();
+        rslt = nats::Ok{};
         break;
     case '-': // -ERR
-        handleErr();
+        return std::unexpected(handleErr());
         break;
     default:
-        log_(LogLevel::ERROR, "unexpected character: " + std::to_string(next));
-        error = true;
+        return std::unexpected(nats::Error{"unexpected character: " + std::to_string(next)});
         break;
     };
-    return error;
+    return rslt;
 }
 void NATSClient::connect(const NATSInfo& info) {
     log_(LogLevel::INFO, "connected to server name " + info.server_name);
@@ -145,18 +178,25 @@ void NATSClient::unsub(const std::string& sid) {
     send(unsub_msg);
 }
 
-void NATSClient::handleErr() {
+nats::Error NATSClient::handleErr() {
     std::istream is(&response_);
     std::string cmd;
-    std::getline(is, cmd);
-    log_(LogLevel::INFO, cmd);
+    is >> cmd;
+    if (cmd != "-ERR") {
+        return nats::Error{"Unexpected cmd " + cmd};
+    }
+
+    std::string what;
+    std::getline(is, what);
+    return nats::Error{what};
 }
 
-void NATSClient::handleOk() {
+nats::Ok NATSClient::handleOk() {
     std::istream is(&response_);
     std::string cmd;
     std::getline(is, cmd);
     log_(LogLevel::INFO, cmd);
+    return nats::Ok{};
 }
 
 void NATSClient::handleInfo() {
@@ -177,61 +217,21 @@ void NATSClient::handlePing() {
     }
 }
 
-void NATSClient::handleMsg() {
+NATSClient::RespResult NATSClient::handleMsg() {
     if (const auto result = core_.handleMsg(response_); result.has_value()) {
         const auto& ok = result.value();
         if (std::holds_alternative<Message>(ok)) {
             handleMsgPayload(std::get<Message>(ok));
         } else if (std::holds_alternative<nats::MessageNeedsMoreData>(ok)) {
-            const auto& nmd = std::get<nats::MessageNeedsMoreData>(ok);
-            if (nmd.bytes.has_value()) {
-                log_(LogLevel::INFO, "need " + std::to_string(nmd.bytes.value()) + " more bytes.");
-            }
-            log_(LogLevel::ERROR, "need to implement support for partial reads. " + to_string(nmd));
-            close();
+            return std::get<nats::MessageNeedsMoreData>(ok);
         } else {
-            log_(LogLevel::ERROR, "unhandled type");
-            close();
+            return std::unexpected(nats::Error{"unhandled type"});
         }
     } else {
-        log_(LogLevel::ERROR, "stream error reading message: " + result.error().what);
-        close();
+        return std::unexpected(result.error());
     }
+    return nats::Ok{};
 }
-// nats::MessageResult NATSClient::handleMsg() {
-//     // expected syntax:
-//     // MSG <subject> <sid> [reply-to] <#bytes>␍␊
-//     if (const auto result = core_.handleMsg(response_); result.has_value()) {
-//         return [this, result] {
-//             const auto& ok = result.value();
-//             if (std::holds_alternative<Message>(ok)) {
-//                 handleMsgPayload(std::get<Message>(ok));
-//                 doRead();
-//             } else if (std::holds_alternative<nats::MessageNeedsMoreData>(ok)) {
-//                 const auto& nmd = std::get<nats::MessageNeedsMoreData>(ok);
-//                 if (nmd.bytes.has_value()) {
-//                     net::async_read(socket_, response_, net::transfer_exactly(nmd.bytes.value()),
-//                         [this, msg=nmd.partial](const boost::system::error_code& ec, std::size_t bytes_transferred) mutable {
-//                             std::cout << "received msg of " << bytes_transferred << " bytes" << std::endl;
-//                             if (!ec) {
-//                                 handleMsgPayload(msg);
-//                                 doRead();
-//                             } else {
-//                                 onRead(ec, bytes_transferred);
-//                             }
-//                         });
-//                 } else {
-//                     // unhandled!
-//                 }
-//             } else {
-//                 // unhandled!
-//             }
-//         };
-//     } else {
-//         // unhandled!
-//     }
-//     return []{};
-// }
 
 Message NATSClient::handleMsgPayload(const Message& msg) {
     log_(LogLevel::INFO, to_string(msg));
@@ -243,7 +243,6 @@ Message NATSClient::handleMsgPayload(const Message& msg) {
     }
     return msg;
 }
-
 
 void request(NATSClient& nats_client, const nats::Message& tmplt, const NATSClient::MessageHandler& handler) {
     const auto replyInbox = "inbox";
