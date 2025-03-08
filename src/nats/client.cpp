@@ -160,16 +160,10 @@ void NATSClient::handleOk() {
 }
 
 void NATSClient::handleInfo() {
-    std::istream is(&response_);
-    std::string cmd;
-    is >> cmd;
-    log_(LogLevel::INFO, cmd);
-    if (cmd == "INFO") {
-        if (const auto result = core_.handleInfo(response_); result.has_value()) {
-            connect(result.value());
-        } else {
-            log_(LogLevel::ERROR, "bad info> " + result.error().what);
-        }
+    if (const auto result = core_.handleInfo(response_); result.has_value()) {
+        connect(result.value());
+    } else {
+        log_(LogLevel::ERROR, "bad info> " + result.error().what);
     }
 }
 
