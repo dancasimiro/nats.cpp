@@ -193,6 +193,54 @@ TEST_CASE( "Missing LF", "[message]" ) {
     REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
 }
 
+TEST_CASE( "Short Message", "[message]" ) {
+    nats::Core core;
+    
+    boost::asio::streambuf buf;
+    std::ostream os(&buf);
+    // payload is short
+    os << "MSG test.subject 10 3\r\nhi\r\n";
+
+    const auto result = core.handleMsg(buf);
+    REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
+TEST_CASE( "Short Message 2", "[message]" ) {
+    nats::Core core;
+    
+    boost::asio::streambuf buf;
+    std::ostream os(&buf);
+    // payload is short and \r\n is corrupted
+    os << "MSG test.subject 10 3\r\nhi\r";
+
+    const auto result = core.handleMsg(buf);
+    REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
+TEST_CASE( "Short Message 3", "[message]" ) {
+    nats::Core core;
+    
+    boost::asio::streambuf buf;
+    std::ostream os(&buf);
+    // payload is longer than expected value
+    os << "MSG test.subject 10 3\r\nhi!!!!!!!!!!!\r\n";
+
+    const auto result = core.handleMsg(buf);
+    REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
+TEST_CASE( "Short Message 4", "[message]" ) {
+    nats::Core core;
+    
+    boost::asio::streambuf buf;
+    std::ostream os(&buf);
+    // payload is longer than expected value and \r\n is corrupted
+    os << "MSG test.subject 10 3\r\nhi!!!!!!!!!!!\n";
+
+    const auto result = core.handleMsg(buf);
+    REQUIRE_THAT(result, HasExpectedError(nats::Error{}));
+}
+
 TEST_CASE( "Info", "[info]" ) {
     nats::Core core;
 

@@ -50,42 +50,35 @@ nats::MessageResult nats::Core::handleMsg(std::streambuf& buf) {
     }
         
     msg.bytes = bytes.value();
-    size_t bytes_to_read = msg.bytes + 2;
+    size_t bytes_to_read = msg.bytes;
     if (buf.in_avail() < bytes_to_read) {
-        bytes_to_read -= buf.in_avail();
+        bytes_to_read = bytes_to_read + 2 - buf.in_avail();
         return MessageNeedsMoreData{ .bytes = bytes_to_read, .partial = msg };
     }
     return completeMsg(buf, std::move(msg));
 }
 
-nats::Message nats::Core::completeMsg(std::streambuf& buf, Message&& in) {
-    assert(buf.in_avail() >= (in.bytes + 2));
+std::expected<nats::Message, nats::Error> nats::Core::completeMsg(std::streambuf& buf, Message&& msg) {
+    assert(buf.in_avail() >= msg.bytes);
 
-    auto msg = in;
     std::istream is(&buf);
     msg.payload.resize(msg.bytes);
     is.read(msg.payload.data(), msg.bytes);
 
     // consume the trailing CRLF (2 bytes)
-    buf.sbumpc();
-    buf.sbumpc();
+    if (!buf.in_avail() || (buf.sbumpc() != '\r')) {
+        return std::unexpected(Error{"MSG missing trailing \r\n"});
+    }
+    if (!buf.in_avail() || (buf.sbumpc() != '\n')) {
+        return std::unexpected(Error{"MSG missing trailing \r\n"});
+    } 
 
     return msg;
 }
 
 std::expected<nats::Message, nats::Error>
 nats::Core::handleMsgCompletion(std::streambuf& buf, nats::MessageNeedsMoreData&& nmd) {
-    assert(buf.in_avail() >= (nmd.partial.bytes + 2));
-
-    std::istream is(&buf);
-    nmd.partial.payload.resize(nmd.partial.bytes);
-    is.read(nmd.partial.payload.data(), nmd.partial.bytes);
-
-    // consume the trailing CRLF (2 bytes)
-    buf.sbumpc();
-    buf.sbumpc();
-
-    return nmd.partial;
+    return completeMsg(buf, std::move(nmd.partial));
 }
 
 nats::InfoResult nats::Core::handleInfo(std::streambuf& buf) {

@@ -32,7 +32,7 @@ public:
     /// @brief Process info from the NATS server
     InfoResult handleInfo(std::streambuf& is);
 private:
-    Message completeMsg(std::streambuf& is, Message&& msg);
+    std::expected<Message, Error> completeMsg(std::streambuf& is, Message&& msg);
 };
 
 } // namespace nats
